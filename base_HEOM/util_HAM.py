@@ -1,0 +1,302 @@
+import numpy as np
+from numpy import linalg as LA
+import scipy.linalg as sp
+from qutip import *
+
+def convert_to_xx(ham_sys_x, ham_sysbath_x, dipole_x):
+    import scipy
+    # Two-exciton Hamiltonian
+    nx = ham_sys_x.shape[0]
+    nxx = int(nx*(nx-1)/2)
+    ham_sys_xx = np.zeros((nxx,nxx))
+    mn = 0
+    for m in range(nx):
+        for n in range(m):
+            if m != n:
+                ham_sys_xx[mn,mn] = ham_sys_x[m,m] + ham_sys_x[n,n]
+                op = 0
+                for o in range(nx):
+                    for p in range(o):
+                        if o != p:
+                            ham_sys_xx[mn,op] = ham_sys_x[m,o]*(n==p) + ham_sys_x[n,p]*(m==o)
+                        op += 1
+            mn += 1
+
+    ham_sys = scipy.linalg.block_diag([[0]], ham_sys_x, ham_sys_xx)
+    nsite = ham_sys.shape[0]
+
+    nbath = len(ham_sysbath_x)
+    ham_sysbath = []
+    for b in range(nbath):
+        ham_sysbath_xx_b = np.zeros((nxx,nxx))
+        mn = 0
+        for m in range(nx):
+            for n in range(m):
+                ham_sysbath_xx_b[mn,mn] = ham_sysbath_x[b][m,m] + ham_sysbath_x[b][n,n]
+                mn += 1
+        ham_sysbath.append(
+            scipy.linalg.block_diag([[0]], ham_sysbath_x[b], ham_sysbath_xx_b) )
+
+    dipole_xx = np.zeros((nx,nxx))
+    for i in range(nx):
+        mn = 0
+        for m in range(nx):
+            for n in range(m):
+                dipole_xx[i,mn] = dipole_x[m]*(i==n) + dipole_x[n]*(i==m)
+                mn += 1
+
+    dipole = np.zeros((1+nx+nxx,1+nx+nxx))
+    for i in range(nx):
+        dipole[0,i+1] = dipole[i+1,0] = dipole_x[i]
+        mn = 0
+        for m in range(nx):
+            for n in range(m):
+                dipole[i+1,mn+1+nx] = dipole[mn+1+nx,i+1] = dipole_xx[i,mn]
+
+    return ham_sys, ham_sysbath, dipole
+
+
+def hamiltonian_custom_order(N, energies, couplings):
+    # Define the annihilation operator B and the creation operator B_dagger
+    B = basis(2, 0) * basis(2, 1).dag()
+    B_dagger = B.dag()
+    
+    # Initialize Hamiltonian
+    H = 0
+    
+    # On-site energy terms: sum(e_i * B_i^dagger * B_i)
+    for i in range(N):
+        operators = [qeye(2) for _ in range(N)]
+        operators[i] = B_dagger * B  # Place B_i^dagger * B_i at position i
+        H += energies[i] * tensor(*operators)
+    
+    # Coupling terms: sum(J_ij * B_i^dagger * B_j) for i != j
+    for i in range(N):
+        for j in range(N):
+            if i != j:
+                operators_i = [qeye(2) for _ in range(N)]
+                operators_j = [qeye(2) for _ in range(N)]
+                
+                operators_i[i] = B_dagger  # B_i^dagger at position i
+                operators_j[j] = B         # B_j at position j
+                
+                H += couplings[i][j] * tensor(*operators_i) * tensor(*operators_j)
+    
+    # Define custom order of states up to the second excitation manifold
+    states_ordered = ['0' * N]  # Start with the no-excitation state (|000...0⟩)
+    
+    # Add single-excitation states (e.g., |100⟩, |010⟩, |001⟩ for N=3)
+    states_ordered += [f"{'0' * i}1{'0' * (N - i - 1)}" for i in range(N)]
+    
+    # Add double-excitation states (e.g., |110⟩, |101⟩, |011⟩ for N=3)
+    for i in range(N):
+        for j in range(i + 1, N):
+            state = ['0'] * N
+            state[i] = '1'
+            state[j] = '1'
+            states_ordered.append(''.join(state))
+    
+    # Generate the reordering index based on the custom state order
+    all_states = [f"{format(i, f'0{N}b')}" for i in range(2**N)]
+    index_map = [all_states.index(state) for state in states_ordered]
+    
+    # Reorder and truncate the Hamiltonian using the index map
+    #H_truncated = Qobj(np.array(H.full())[index_map][:, index_map])
+    H_truncated = np.array(H.full())[index_map][:, index_map]
+
+    # Create ordered labels for the truncated basis states
+    labels_ordered = [f"|{state}⟩" for state in states_ordered]
+    
+    return H_truncated, labels_ordered
+
+
+def mu_operator_ordered(N, mu_vec):
+    # The creation-annihilation operator
+    op = basis(2, 0) * basis(2, 1).dag() + basis(2, 1) * basis(2, 0).dag()
+    
+    # Initialize the sum operator
+    mu = 0
+    
+    # Iterate over each qubit position to build the operator
+    for i in range(N):
+        operators = [qeye(2) for _ in range(N)]
+        operators[i] = mu_vec[i]*op
+        mu += tensor(*operators)
+    
+    # Define custom order of states up to the second excitation manifold
+    states_ordered = ['0' * N]  # Start with the no-excitation state (|000...0⟩)
+    
+    # Add single-excitation states (e.g., |100⟩, |010⟩, |001⟩ for N=3)
+    states_ordered += [f"{'0' * i}1{'0' * (N - i - 1)}" for i in range(N)]
+    
+    # Add double-excitation states (e.g., |110⟩, |101⟩, |011⟩ for N=3)
+    for i in range(N):
+        for j in range(i + 1, N):
+            state = ['0'] * N
+            state[i] = '1'
+            state[j] = '1'
+            states_ordered.append(''.join(state))
+    
+    # Generate the reordering index based on the custom state order
+    all_states = [f"{format(i, f'0{N}b')}" for i in range(2**N)]
+    index_map = [all_states.index(state) for state in states_ordered]
+
+    # Reorder and truncate the Hamiltonian using the index map
+    #H_truncated = Qobj(np.array(H.full())[index_map][:, index_map])
+    mu_reordered = np.array(mu.full())[index_map][:, index_map]
+
+    # Create ordered labels for the truncated basis states
+    labels_ordered = [f"|{state}⟩" for state in states_ordered]
+    return mu_reordered, labels_ordered
+
+
+def sys_bath_ordered(N, site):
+    # The creation-annihilation operator
+    op = basis(2, 1) * basis(2, 1).dag()
+    operators = [qeye(2) for _ in range(N)]
+    operators[site] = op
+    # Initialize the sum operator
+    Q = tensor(*operators)
+    
+    # Iterate over each qubit position to build the operator
+    # Define custom order of states up to the second excitation manifold
+    states_ordered = ['0' * N]  # Start with the no-excitation state (|000...0⟩)
+    
+    # Add single-excitation states (e.g., |100⟩, |010⟩, |001⟩ for N=3)
+    states_ordered += [f"{'0' * i}1{'0' * (N - i - 1)}" for i in range(N)]
+    
+    # Add double-excitation states (e.g., |110⟩, |101⟩, |011⟩ for N=3)
+    for i in range(N):
+        for j in range(i + 1, N):
+            state = ['0'] * N
+            state[i] = '1'
+            state[j] = '1'
+            states_ordered.append(''.join(state))
+    
+    # Generate the reordering index based on the custom state order
+    all_states = [f"{format(i, f'0{N}b')}" for i in range(2**N)]
+    index_map = [all_states.index(state) for state in states_ordered]
+
+    # Reorder and truncate the Hamiltonian using the index map
+    #H_truncated = Qobj(np.array(H.full())[index_map][:, index_map])
+    Q_reordered = np.array(Q.full())[index_map][:, index_map]
+
+    # Create ordered labels for the truncated basis states
+    labels_ordered = [f"|{state}⟩" for state in states_ordered]
+    return Q_reordered, labels_ordered
+
+
+def sys_bath_list(N, site_list):
+    list_Q = []
+    for site in site_list:
+        list_Q.append(sys_bath_ordered(N,site-1)[0])
+    labels = sys_bath_ordered(N,0)[1]
+    return list_Q ,labels
+
+
+def direct_sum(matrix, N):
+    """
+    Compute the direct sum of an nxn matrix N times.
+
+    Parameters:
+    - matrix: A square matrix (n x n).
+    - N: The number of times to take the direct sum.
+
+    Returns:
+    - A block diagonal matrix representing the direct sum of the input matrix.
+    """
+    # Get the size of the original matrix
+    n = matrix.shape[0]
+    
+    # Initialize a list to hold the diagonal blocks
+    blocks = [matrix] * N
+    
+    # Use np.block to create the block diagonal matrix
+    direct_sum_matrix = np.block([[blocks[i] if i == j else np.zeros_like(matrix)
+                                   for j in range(N)] for i in range(N)])
+    
+    return direct_sum_matrix
+
+
+def pad_vector_with_zeros(vector, N):
+    """
+    Pad a vector of dimension D with zeros such that the resulting vector has size D*N.
+
+    Parameters:
+    - vector: A 1D numpy array of dimension D.
+    - N: The number of total elements (D*N), where N is the factor by which the vector is padded.
+
+    Returns:
+    - A 1D numpy array of size D*N.
+    """
+    # The original length of the vector
+    D = len(vector)
+    
+    # Create a new vector with D*N elements, initialized to zero
+    padded_vector = np.zeros(D * N)
+    
+    # Place the original vector into the first D elements
+    padded_vector[:D] = vector
+    
+    return padded_vector
+
+
+
+kB = 0.69352    # in cm-1 / K
+hbar = 5308.8   # in cm-1 * fs
+# System Hamiltonian
+# n = 0 is ground state
+#nbath = 2
+J = -200.0
+
+# One-exciton Hamiltonian
+ham_sys_x = np.array([[ -50., J ],
+                      [ J,  50.]])
+
+#ham_sys_x = np.array([[ 0, -100., 0 ],
+#                      [ -100.,  100., 0],
+#                      [0,   0  ,0  ]])
+
+#ham_sys_x = np.array([[ 0, 0., 0 ],
+#                     [ 0.,  -50., -100],
+#                     [ 0,   -100  ,50  ]])
+
+# ham_sys_x =  np.array([[505, -94.8, 5.5],
+#                       [-94.8, 425 ,29.8],
+#                       [ 5.5,   29.8 ,195]])
+
+
+# ham_sys_x =  np.array([[505+35, -94.8, 5.5],
+#                       [-94.8, 425+35 ,29.8],
+#                       [ 5.5,   29.8 ,195+35]])
+
+# ham_sys_x =  np.array([[410, -87.7, 5.5],
+#                       [-87.7, 530 ,30.8],
+#                       [ 5.5,  30.8 ,210]])
+
+#dipole_x = np.array([1.0,0.391,-0.312])
+dipole_x = np.array([1.0,-0.2])
+
+coupling_sites = [1,2]
+nbath = len(coupling_sites)
+nx = ham_sys_x.shape[0]
+
+Energies = ham_sys_x.diagonal()
+Couplings = ham_sys_x
+Dipole = dipole_x
+
+### Double Excitation Hamiltonian construction 
+ham_sys , labels= hamiltonian_custom_order(nx, Energies, Couplings)
+dipole0, labels_dip = mu_operator_ordered(nx, Dipole)
+ham_sysbath, labels_sysbath = sys_bath_list(nx, coupling_sites)
+
+### Check labels are correct  ###
+print("Label correct", labels ==labels_dip ==labels_sysbath)
+
+nsite = ham_sys.shape[0]
+
+lam = 200.
+gamma = hbar* 1./100. # in 1/fs
+kT = kB*77.
+
+

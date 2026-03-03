@@ -1,0 +1,35 @@
+#!/bin/bash -l                                                           
+#SBATCH --nodes=1                                                         
+#SBATCH --ntasks=1                   
+#SBATCH --cpus-per-task=40                                                     
+#SBATCH --job-name=test
+#SBATCH --partition=standard                                                 
+#SBATCH --time=7-00:00:00                                                     
+#SBATCH --mem=180Gb                                                           
+#SBATCH --output=job.out                                                     
+#SBATCH --error=job.err                                 
+#SBATCH --mail-type=END,FAIL                                                  
+#SBATCH --export=NONE  
+#SBATCH --mail-user=leherrer@udel.edu                                                       
+. /opt/shared/slurm/templates/libexec/common.sh
+#                                        
+# Setup Keras virtualenv:                          
+#                                              
+#vpkg_require intel-python texlive
+vpkg_require python/20221031:openqs
+
+#           
+# Run a Python script in that virtualenv:                         
+# 
+python3 main.py > run.out
+#python3 main_dyn.py > run_dyn.out
+#python3 plot.py 
+
+rc=$?
+#                                                                 
+# Do cleanup work, etc....                                     
+#                                                        
+#                                                           
+# Exit with whatever exit code our Python script handed back:     
+#                                                                  
+exit $rc
