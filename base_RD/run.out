@@ -1,0 +1,10 @@
+Label correct True
+Calculatin eigenvalues
+Execution time: 0.00 seconds
+(4, 4)
+100.0
+--- Spectrum will require O(50) propagations.
+--- Calculating third-order response function ...
+2500
+Execution time: 0.97 seconds
+done.
