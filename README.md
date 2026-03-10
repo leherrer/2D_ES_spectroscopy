@@ -39,6 +39,7 @@ The code is written in an object-oriented structure and separates:
 
 * Python ≥ 3.9
 * NumPy
+* Qutip 5.1.1
 * Multiprocessing (standard library)
 
 
